@@ -99,6 +99,8 @@ modparam("sipcapture", "hep_capture_on", 1)
 modparam("sipcapture", "insert_retries", 5)
 modparam("sipcapture", "insert_retry_timeout", 10)
 #modparam("sipcapture", "capture_node", "homer01")
+#modparam("sipcapture", "nonsip_hook", 1)
+
 
 #!ifdef WITH_HOMER_GEO
 modparam("geoip", "path", "/usr/share/GeoIP/GeoIPCity.dat")
@@ -863,10 +865,6 @@ route[STORE] {
 	sip_capture("$var(a)");
 }
 
-event_route[sipcapture:request] {
-	xlog("received sipcapture request from $si:$sp\r\n");
-}
-
 #!ifdef WITH_HOMER_CUSTOM_STATS
 event_route[xhttp:request] {
         set_reply_close();
@@ -906,3 +904,24 @@ event_route[xhttp:request] {
         exit;
 }
 #!endif
+
+
+event_route[sipcapture:request] {
+
+        xlog("HEP Request!\n");
+        xlog("received sipcapture request from $si:$sp\r\n");
+        xlog("HEP VERSION $hep(version) request from $si:$sp\r\n");
+        xlog("HEP CHUNK Source IP $hep(0x002) request from $si:$sp\r\n");
+        #Is it SIP ?
+        if($hep(0x00b) == 1){
+
+                #Do parsing internal
+                return 1;
+        }
+        else 
+        {
+                #If report lets proceed here with payload
+                xlog("HEP CHUNK PAYLOAD $hep(0x00f) request from $si:$sp\r\n");
+                return 0;      
+        }
+}
