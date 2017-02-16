@@ -918,6 +918,13 @@ event_route[sipcapture:request] {
                 #Do parsing internal
                 return 1;
         }
+	# Save to rtcp data into db partitions
+	else if($hep(0x00b) == 5){
+		$var(utc) = $utimef(%Y%m%d);
+		$var(a) = "rtcp_capture_all_" + $var(utc);
+		report_capture("$var(a)", "$hep(0x011)", "$hep(0x00f)");
+		drop;
+	}
         else 
         {
                 #If report lets proceed here with payload
