@@ -40,6 +40,8 @@ children=5
 /* uncomment the next line to disable TCP (default on) */
 disable_tcp=no
 
+tcp_accept_no_cl=yes
+
 /* IP and port for HEP capturing) */
 listen=HOMER_LISTEN_PROTO:HOMER_LISTEN_IF:HOMER_LISTEN_PORT
 
@@ -934,8 +936,8 @@ event_route[sipcapture:request] {
                 #xlog("HEP RTCP CHUNK PAYLOAD $hep(0x00f) request from $si:$sp\r\n");
                 #Do parsing internal
                 $var(utc) = $timef(%Y%m%d); 
-                #$var(table) = "rtcp_capture_all_" + $var(utc);
-                $var(table) = "rtcp_capture";
+                $var(table) = "rtcp_capture_all_" + $var(utc);
+                #$var(table) = "rtcp_capture";
 
                 $var(json) = $hep(0x00f);
                 $var(family) = $hep(0x001);
@@ -955,7 +957,7 @@ event_route[sipcapture:request] {
                 #$var(millisec) = ""+$var(timesec)+$var(timeusec);
                 $var(t_date) = "FROM_UNIXTIME(" + $var(timesec) + ", '%Y-%m-%d %H:%i:%S')";
 
-                xlog("HEP CHUNK RTCP JSON PAYLOAD $var(json) request from $si:$sp: $var(table),$var(family),$var(proto),$var(srcip),$var(dstip), $var(srcport), $var(dstport), $var(correlation_id)\r\n");
+                #xlog("HEP CHUNK RTCP JSON PAYLOAD $var(json) request from $si:$sp: $var(table),$var(family),$var(proto),$var(srcip),$var(dstip), $var(srcport), $var(dstport), $var(correlation_id)\r\n");
 
                 #if(!jansson_get("timestamp", $var(json), "$var(millisec)"))
                 #{
