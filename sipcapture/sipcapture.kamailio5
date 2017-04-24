@@ -935,7 +935,7 @@ event_route[sipcapture:request] {
                 #If report lets proceed here with payload
                 #xlog("HEP RTCP CHUNK PAYLOAD $hep(0x00f) request from $si:$sp\r\n");
                 #Do parsing internal
-                $var(utc) = $timef(%Y%m%d); 
+                $var(utc) = $utimef(%Y%m%d); 
                 $var(table) = "rtcp_capture_all_" + $var(utc);
                 #$var(table) = "rtcp_capture";
 
