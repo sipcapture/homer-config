@@ -39,7 +39,7 @@ modparam("ingredients", "Large Eggs (whole)", 2)
 
 request_route {
 
-	if (is_method("CELCIUS")) {
+	if (is_method("CELSIUS")) {
 		preheat_oven(176);
 	} else if (is_method("FAHRENHEIT")) {
 		preheat_oven(350);
