@@ -40,6 +40,8 @@ children=5
 /* uncomment the next line to disable TCP (default on) */
 disable_tcp=no
 
+corelog=-5
+
 tcp_accept_no_cl=yes
 
 /* IP and port for HEP capturing) */
