@@ -1,0 +1,2326 @@
+#!KAMAILIO
+#
+# Example configuration file for a sipcapture node
+#
+
+####### Global Parameters definitions #########
+#
+# Please, make all your configuration changes here
+#
+# *** To enable extra stats
+#	  - define WITH_STATISTIC_METHOD_EXTRA
+#	  - define WITH_STATISTIC_INVITE_1XX
+
+#!substdef "!HOMER_DB_USER!{{ DB_USER }}!g"
+#!substdef "!HOMER_DB_PASSWORD!{{ DB_PASS }}!g"
+#!substdef "!HOMER_DB_HOST!{{ DB_HOST }}!g"
+#!substdef "!HOMER_LISTEN_PROTO!udp!g"
+#!substdef "!HOMER_LISTEN_IF!0.0.0.0!g"
+#!substdef "!HOMER_LISTEN_PORT!9060!g"
+#!substdef "!HOMER_STATS_SERVER!tcp:HOMER_LISTEN_IF:8888!g"
+# *** Define the time in seconds to check route[TIMER_STATS]
+#!substdef "!CHECK_TIMER_INTERVAL!60!g"
+
+# *** Push to Elasticsearch? 
+# *** Please replace {{ ELASTIC }} with your socket
+# *** For example http://10.0.0.1:9200
+
+# *** Push to Graylog? 
+# *** Please replace {{ GRAYLOGURL }} with your socket
+# *** For example http://10.0.0.2:12201
+
+
+#!substdef "!ELASTICSEARCH_URL!{{ ELASTIC }}!g"
+##!substdef "!GRAYLOG_GELF_HTTP_URL!{{ GRAYLOGURL }}!g"
+
+####### Global Parameters #########
+
+debug=1
+log_stderror=no
+
+memdbg=5
+memlog=5
+
+##!define KAMAILIO_4_3
+#!define WITH_HOMER_GEO
+#!define WITH_HOMER_CUSTOM_STATS #enable it for HTTP custom stats
+#!define WITH_STATISTIC_METHOD_EXTRA
+#!define WITH_STATISTIC_INVITE_1XX
+#!define WITH_X_RTP_STATS
+##!define TO_GRAYLOG
+#!define TO_ELASTIC
+
+log_facility=LOG_LOCAL1
+
+fork=yes
+children=5
+
+/* uncomment the next line to disable TCP (default on) */
+disable_tcp=yes
+
+/* IP and port for HEP capturing) */
+listen=HOMER_LISTEN_PROTO:HOMER_LISTEN_IF:HOMER_LISTEN_PORT
+
+#!ifdef WITH_HOMER_CUSTOM_STATS
+listen=HOMER_STATS_SERVER
+#!endif
+
+#Max loops
+max_while_loops=100
+mpath="/usr/local/lib64/kamailio/modules"
+
+loadmodule "pv.so"
+loadmodule "db_mysql.so"
+loadmodule "sipcapture.so"
+loadmodule "textops.so"
+loadmodule "rtimer.so"
+loadmodule "xlog.so"
+loadmodule "sqlops.so"
+loadmodule "htable.so"
+loadmodule "tm.so"
+loadmodule "sl.so"
+loadmodule "siputils.so"
+loadmodule "exec.so"
+loadmodule "jansson.so"
+loadmodule "http_async_client.so"
+loadmodule "ipops.so"
+loadmodule "ctl.so"
+loadmodule "kex.so"
+
+#!ifdef WITH_HOMER_GEO
+loadmodule "geoip.so"
+#!endif
+
+#!ifdef WITH_HOMER_CUSTOM_STATS
+loadmodule "xhttp.so"
+loadmodule "avpops.so"
+#!endif
+
+modparam("htable", "htable", "a=>size=8;autoexpire=400")
+modparam("htable", "htable", "b=>size=8;autoexpire=31")
+# TODO: tune autoexpire setting for htable "c"
+modparam("htable", "htable", "c=>size=8;autoexpire=31")
+
+#!ifdef WITH_HOMER_CUSTOM_STATS
+modparam("htable", "htable", "d=>size=8;autoexpire=400")
+modparam("xhttp", "url_match", "^/api/v1/stat")
+#!endif
+
+# ip stats
+modparam("htable", "htable", "e=>size=8;autoexpire=400")
+# geoip stats
+modparam("htable", "htable", "f=>size=8;autoexpire=400")
+# useragent stats
+modparam("htable", "htable", "g=>size=8;autoexpire=400")
+# alarms
+modparam("htable", "htable", "h=>size=8;autoexpire=400")
+# count call-id's for new sessions
+modparam("htable", "htable", "i=>size=8;autoexpire=120")
+# count call-id's for sessions with bye
+modparam("htable", "htable", "j=>size=10;autoexpire=120")
+#!ifdef WITH_X_RTP_STATS
+modparam("htable", "htable", "x=>size=8;autoexpire=30")
+#!endif
+modparam("rtimer", "timer", "name=ta;interval=CHECK_TIMER_INTERVAL;mode=1;")
+modparam("rtimer", "exec", "timer=ta;route=TIMER_STATS")
+
+modparam("sqlops","sqlcon","cb=>mysql://HOMER_DB_USER:HOMER_DB_PASSWORD@127.0.0.1/homer_statistic")
+
+# ----- mi_fifo params -----
+
+####### Routing Logic ########
+modparam("sipcapture", "db_url", "mysql://HOMER_DB_USER:HOMER_DB_PASSWORD@127.0.0.1/homer_data")
+modparam("sipcapture", "capture_on", 1)
+modparam("sipcapture", "hep_capture_on", 1)
+modparam("sipcapture", "insert_retries", 5)
+modparam("sipcapture", "insert_retry_timeout", 10)
+#modparam("sipcapture", "capture_node", "homer01")
+
+#!ifdef WITH_HOMER_GEO
+modparam("geoip", "path", "/usr/share/GeoIP/GeoLiteCity.dat")
+#!endif
+
+# Main SIP request routing logic
+# - processing of any incoming SIP request starts with this route
+route {
+
+	#Count SIP methods on all interfaces
+	if($sht(a=>method::total) == $null) $sht(a=>method::total) = 0;
+	$sht(a=>method::total) = $sht(a=>method::total) + 1;
+
+	#Count all packets
+	if($sht(a=>packet::count) == $null) $sht(a=>packet::count) = 0;
+	$sht(a=>packet::count) = $sht(a=>packet::count) + 1;
+
+	#Sum up packet size
+	if($sht(a=>packet::size) == $null) $sht(a=>packet::size) = 0;
+	$sht(a=>packet::size) = $sht(a=>packet::size) + $ml;
+
+	if($sht(b=>$rm::$cs::$ci) != $null) {
+		#$var(a) = "sip_capture_call" + "_%Y%m%d";
+		#Store
+		route(STORE);
+		drop;
+	}
+
+	$sht(b=>$rm::$cs::$ci) = 1;
+
+	#Count transaction SIP methods
+	if($sht(a=>method::all) == $null) $sht(a=>method::all) = 0;
+	$sht(a=>method::all) = $sht(a=>method::all) + 1;
+
+	if (is_method("INVITE|REGISTER")) {
+
+		if($ua =~ "(friendly-scanner|sipvicious|sipcli)") {
+			#sql_query("cb", "INSERT INTO alarm_data_mem (create_date, type, total, source_ip, description) VALUES(NOW(), 'scanner', 1, '$si', 'Friendly scanner alarm!') ON DUPLICATE KEY UPDATE total=total+1");
+			$var(key) = $si + "=" + $ua;
+			if($sht(h=>$var(key)) != $null) {
+				$sht(h=>$var(key)) = 0;
+			}
+			$sht(h=>$var(key)) = $sht(h=>$var(key)) + 1;
+			#TODO: Do we need this?
+			#route(KILL_VICIOUS);
+		}
+
+		#IP Method
+		#sql_query("cb", "INSERT INTO stats_ip_mem ( method, source_ip, total) VALUES('$rm', '$si', 1) ON DUPLICATE KEY UPDATE total=total+1");
+		$var(key) = $si + "-" + $rm;
+		if($sht(e=>$var(key)) != $null) {
+			$sht(e=>$var(key)) = 0;
+		}
+		$sht(e=>$var(key)) = $sht(e=>$var(key)) + 1;
+
+	#!ifdef WITH_HOMER_GEO
+		if(geoip_match("$si", "src")) {
+			xlog("REGISTER|INVITE SIP message [$si] from: $gip(src=>cc)\n");
+			#sql_query("cb", "INSERT INTO stats_geo_mem ( method, country, lat, lon, total) VALUES('$rm', '$gip(src=>cc)', '$gip(src=>lat)', '$gip(src=>lon)', 1) ON DUPLICATE KEY UPDATE total=total+1");
+
+			$var(key) = $rm + "=" + $gip(src=>cc) + "=" + $gip(src=>lat) + "=" + $gip(src=>lon);
+			if($sht(f=>$var(key)) != $null) {
+				$sht(f=>$var(key)) = 0;
+			}
+			$sht(f=>$var(key)) = $sht(f=>$var(key)) + 1;
+		}
+	#!endif
+
+		if($au != $null)	$var(anumber) = $au;
+		else $var(anumber) = $fU;
+
+		if($(var(anumber){s.substr,0,5}) == "+204231") {
+			if($sht(a=>alarm::scam) == $null) $sht(a=>alarm::scam) = 0;
+			$sht(a=>alarm::scam) = $sht(a=>alarm::scam) + 1;
+		}
+
+		if($(rU{s.substr,0,5}) == "+204231") {
+			if($sht(a=>alarm::scam) == $null) $sht(a=>alarm::scam) = 0;
+			$sht(a=>alarm::scam) = $sht(a=>alarm::scam) + 1;
+		}
+
+		#if($sel(contact.uri.host) =~ "^([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}))$") {
+		if($sel(contact.uri.host) =~ "^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$") {
+			if($sht(a=>alarm::dns) == $null) $sht(a=>alarm::dns) = 0;
+			$sht(a=>alarm::dns) = $sht(a=>alarm::dns) + 1;
+		}
+
+		if($sel(contact.uri.host) != $si) {
+			if($sht(a=>alarm::spoofing) == $null) $sht(a=>alarm::spoofing) = 0;
+			$sht(a=>alarm::spoofing) = $sht(a=>alarm::spoofing) + 1;
+		}
+
+		if($au =~ "(\=)|(\-\-)|(\')|(\#)|(\%27)|(\%24)") {
+			if($sht(a=>alarm::sqlinjection) == $null) $sht(a=>alarm::sqlinjection) = 0;
+			$sht(a=>alarm::sqlinjection) = $sht(a=>alarm::sqlinjection) + 1;
+		}
+
+		if($(hdr(Record-Route)[0]{nameaddr.uri}) != $si) {
+			if($sht(a=>alarm::spoofing) == $null) $sht(a=>alarm::spoofing) = 0;
+			$sht(a=>alarm::spoofing) = $sht(a=>alarm::spoofing) + 1;
+		}
+
+		if (is_method("INVITE")) {
+			$sht(i=>$ci) = 1;
+			if (has_totag()) {
+				if($sht(a=>method::reinvite) == $null) $sht(a=>method::reinvite) = 0;
+				$sht(a=>method::reinvite) = $sht(a=>method::reinvite) + 1;
+			}
+			else {
+				if($sht(a=>method::invite) == $null) $sht(a=>method::invite) = 0;
+				$sht(a=>method::invite) = $sht(a=>method::invite) + 1;
+				if($adu != $null) {
+					if($sht(a=>method::invite::auth) == $null) $sht(a=>method::invite::auth) = 0;
+					$sht(a=>method::invite::auth) = $sht(a=>method::invite::auth) + 1;
+				}
+				if($ua != $null) {
+					#sql_query("cb", "INSERT INTO stats_useragent_mem (useragent, method, total) VALUES('$ua', 'INVITE', 1) ON DUPLICATE KEY UPDATE total=total+1");
+					$var(key) = $ua + "=" + $rm;
+					if($sht(g=>$var(key)) != $null) {
+						$sht(g=>$var(key)) = 0;
+					}
+					$sht(g=>$var(key)) = $sht(g=>$var(key)) + 1;
+				}
+			}
+		}
+		else {
+			if($sht(a=>method::register) == $null) $sht(a=>method::register) = 0;
+			$sht(a=>method::register) = $sht(a=>method::register) + 1;
+			if($adu != $null) {
+				if($sht(a=>method::register::auth) == $null) $sht(a=>method::register::auth) = 0;
+				$sht(a=>method::register::auth) = $sht(a=>method::register::auth) + 1;
+			}
+			if($ua != $null) {
+				#sql_query("cb", "INSERT INTO stats_useragent_mem (useragent, method, total) VALUES('$ua', 'REGISTER', 1) ON DUPLICATE KEY UPDATE total=total+1");
+				$var(key) = $ua + "=" + $rm;
+				if($sht(g=>$var(key)) != $null) {
+					$sht(g=>$var(key)) = 0;
+				}
+				$sht(g=>$var(key)) = $sht(g=>$var(key)) + 1;
+			}
+		}
+	}
+	else if(is_method("BYE")) {
+		if($sht(a=>method::bye) == $null) $sht(a=>method::bye) = 0;
+		$sht(a=>method::bye) = $sht(a=>method::bye) + 1;
+		$sht(j=>$ci) = 1;
+		if(is_present_hf("Reason")) {
+			$var(cause) = $(hdr(Reason){param.value,cause}{s.int});
+			if($var(cause) != 16 && $var(cause) !=17) {
+				if($sht(a=>stats::sdf) == $null) $sht(a=>stats::sdf) = 0;
+				$sht(a=>stats::sdf) = $sht(a=>stats::sdf) + 1;
+			}
+		}
+
+#		if($si != $sht(a=>ipinit::aleg::$ci) && $si != $sht(a=>ipinit::bleg::$ci)) {
+#			if($sht(a=>alarm::sessiontd) == $null) $sht(a=>alarm::sessiontd) = 0;
+#			$sht(a=>alarm::sessiontd) = $sht(a=>alarm::sessiontd) + 1;
+#		}
+	}
+	else if(is_method("CANCEL")) {
+		if($sht(a=>method::cancel) == $null) $sht(a=>method::cancel) = 0;
+		$sht(a=>method::cancel) = $sht(a=>method::cancel) + 1;
+	}
+	else if(is_method("OPTIONS")) {
+		if($sht(a=>method::options) == $null) $sht(a=>method::options) = 0;
+		$sht(a=>method::options) = $sht(a=>method::options) + 1;
+		#xlog("OPTIONS COUNTING.... $sht(a=>method::options)\n");
+	}
+	else if(is_method("REFER")) {
+		if($sht(a=>method::refer) == $null) $sht(a=>method::refer) = 0;
+		$sht(a=>method::refer) = $sht(a=>method::refer) + 1;
+	}
+	else if(is_method("UPDATE")) {
+		if($sht(a=>method::update) == $null) $sht(a=>method::update) = 0;
+		$sht(a=>method::update) = $sht(a=>method::update) + 1;
+	}
+	else if(is_method("PUBLISH")) {
+		if($sht(a=>method::publish) == $null) $sht(a=>method::publish) = 0;
+		$sht(a=>method::publish) = $sht(a=>method::publish) + 1;
+		if($cT == "application/vq-rtcpxr" && $(rb{s.substr,0,1}) != "x") {
+			$var(table) = "report_capture";
+			#$var(callid) = $(rb{re.subst,/(.*)CallID:([0-9A-Za-z_.@-]{5,120})(.*)$/\2/s});
+			$var(callid) = $(rb{re.subst,/.*CallID:([0-9A-Za-z@-_\.]{5,120}).*$/\1/s});
+
+			#Local IP. Only for stats
+			#$var(localaddress) = $(rb{re.subst,/.*LocalAddr:IP=([^\S]+).*$/\1/s});
+
+		#!ifdef KAMAILIO_4_3
+			xlog("report_capture is not in < 4.3");
+		#!else
+			#Workaround for Kamailio < 5
+			report_capture("$var(table)", "$var(callid)", "$mb");
+			#report_capture("$var(table)", "$var(callid)");
+		#!endif
+			drop;
+		}
+	}
+
+#!ifdef WITH_STATISTIC_METHOD_EXTRA
+	else if(is_method("ACK")) {
+		if($sht(a=>method::ack) == $null) $sht(a=>method::ack) = 0;
+		$sht(a=>method::ack) = $sht(a=>method::ack) + 1;
+	}
+	else if(is_method("INFO")) {
+		if($sht(a=>method::info) == $null) $sht(a=>method::info) = 0;
+		$sht(a=>method::info) = $sht(a=>method::info) + 1;
+	}
+	else if(is_method("MESSAGE")) {
+		if($sht(a=>method::message) == $null) $sht(a=>method::message) = 0;
+		$sht(a=>method::message) = $sht(a=>method::message) + 1;
+	}
+	else if(is_method("NOTIFY")) {
+		if($sht(a=>method::notify) == $null) $sht(a=>method::notify) = 0;
+		$sht(a=>method::notify) = $sht(a=>method::notify) + 1;
+	}
+	else if(is_method("PRACK")) {
+		if($sht(a=>method::prack) == $null) $sht(a=>method::prack) = 0;
+		$sht(a=>method::prack) = $sht(a=>method::prack) + 1;
+	}
+	else if(is_method("SUBSCRIBE")) {
+		if($sht(a=>method::subscribe) == $null) $sht(a=>method::subscribe) = 0;
+		$sht(a=>method::subscribe) = $sht(a=>method::subscribe) + 1;
+	}
+	else {
+		if($sht(a=>method::unknown) == $null) $sht(a=>method::unknown) = 0;
+		$sht(a=>method::unknown) = $sht(a=>method::uknown) + 1;
+	}
+#!endif
+
+#!ifdef WITH_X_RTP_STATS
+	if($rm == "BYE") route(PARSE_X_RTP_STATS);
+#!endif
+
+	#Store
+	route(STORE);
+	drop;
+}
+
+onreply_route {
+
+	if($sht(a=>method::total) == $null) $sht(a=>method::total) = 0;
+	$sht(a=>method::total) = $sht(a=>method::total) + 1;
+
+	if($sht(b=>$rs::$cs::$rm::$ci) != $null) {
+		#Store
+		route(STORE);
+		drop;
+	}
+
+	$sht(b=>$rs::$cs::$rm::$ci) = 1;
+
+	if($sht(a=>method::all) == $null) $sht(a=>method::all) = 0;
+	$sht(a=>method::all) = $sht(a=>method::all) + 1;
+
+	#413 Too large
+	if(status == "413") {
+		if($sht(a=>response::413) == $null) $sht(a=>response::413) = 0;
+		$sht(a=>response::413) = $sht(a=>response::413) + 1;
+
+		if($sht(a=>alarm::413) == $null) $sht(a=>alarm::413) = 0;
+		$sht(a=>alarm::413) = $sht(a=>alarm::413) + 1;
+	}
+	#403 Unauthorize
+	else if(status == "403") {
+		if($sht(a=>response::403) == $null) $sht(a=>response::403) = 0;
+		$sht(a=>response::403) = $sht(a=>response::403) + 1;
+
+		if($sht(a=>alarm::403) == $null) $sht(a=>alarm::403) = 0;
+		$sht(a=>alarm::403) = $sht(a=>alarm::403) + 1;
+	}
+	# Too many hops
+	else if(status == "483") {
+		if($sht(a=>response::483) == $null) $sht(a=>response::483) = 0;
+		$sht(a=>response::483) = $sht(a=>response::483) + 1;
+
+		if($sht(a=>alarm::483) == $null) $sht(a=>alarm::483) = 0;
+		$sht(a=>alarm::483) = $sht(a=>alarm::483) + 1;
+	}
+	# loops
+	else if(status == "482") {
+		if($sht(a=>response::482) == $null) $sht(a=>response::482) = 0;
+		$sht(a=>response::482) = $sht(a=>response::482) + 1;
+
+		if($sht(a=>alarm::482) == $null) $sht(a=>alarm::482) = 0;
+		$sht(a=>alarm::482) = $sht(a=>alarm::482) + 1;
+	}
+	# Call Transaction Does not exist
+	else if(status == "481") {
+		if($sht(a=>alarm::481) == $null) $sht(a=>alarm::481) = 0;
+		$sht(a=>alarm::481) = $sht(a=>alarm::481) + 1;
+	}
+	# 408 Timeout
+	else if(status == "408") {
+		if($sht(a=>alarm::408) == $null) $sht(a=>alarm::408) = 0;
+		$sht(a=>alarm::408) = $sht(a=>alarm::408) + 1;
+	}
+	# 400
+	else if(status == "400") {
+		if($sht(a=>alarm::400) == $null) $sht(a=>alarm::400) = 0;
+		$sht(a=>alarm::400) = $sht(a=>alarm::400) + 1;
+	}
+	# MOVED
+	else if(status =~ "^(30[012])$") {
+		if($sht(a=>response::300) == $null) $sht(a=>response::300) = 0;
+		$sht(a=>response::300) = $sht(a=>response::300) + 1;
+	}
+
+	if($rm == "INVITE") {
+		$sht(i=>$ci) = 1;
+		#ISA
+		if(status =~ "^(408|50[034])$") {
+			if($sht(a=>stats::isa) == $null) $sht(a=>stats::isa) = 0;
+			$sht(a=>stats::isa) = $sht(a=>stats::isa) + 1;
+		}
+		#Bad486
+		if(status =~ "^(486|487|603)$") {
+			if($sht(a=>stats::bad::invite) == $null) $sht(a=>stats::bad::invite) = 0;
+			$sht(a=>stats::bad::invite) = $sht(a=>stats::bad::invite) + 1;
+		}
+		#SD
+		if(status =~ "^(50[034])$") {
+			if($sht(a=>stats::sd) == $null) $sht(a=>stats::sd) = 0;
+			$sht(a=>stats::sd) = $sht(a=>stats::sd) + 1;
+		}
+		# 488 not accteptable here
+		if(status == "488") {
+			if($sht(a=>response::488::invite) == $null) $sht(a=>response::488::invite)= 0;
+			$sht(a=>response::488::invite) = $sht(a=>response::488::invite) + 1;
+		}
+		if(status == "407") {
+			if($sht(a=>response::407::invite) == $null) $sht(a=>response::407::invite)= 0;
+			$sht(a=>response::407::invite) = $sht(a=>response::407::invite) + 1;
+		}
+		else if(status == "401") {
+			if($sht(a=>response::401::invite) == $null) $sht(a=>response::401::invite)= 0;
+			$sht(a=>response::401::invite) = $sht(a=>response::401::invite) + 1;
+		}
+		else if(status == "200") {
+			if($sht(a=>response::200::invite) == $null) $sht(a=>response::200::invite)= 0;
+			$sht(a=>response::200::invite) = $sht(a=>response::200::invite) + 1;
+		}
+		#Aditional stats
+	#!ifdef WITH_STATISTIC_INVITE_1XX
+		else if(status == "100") {
+			if($sht(a=>response::100::invite) == $null) $sht(a=>response::100::invite)= 0;
+			$sht(a=>response::100::invite) = $sht(a=>response::100::invite) + 1;
+		}
+		else if(status == "180") {
+			if($sht(a=>response::180::invite) == $null) $sht(a=>response::180::invite)= 0;
+			$sht(a=>response::180::invite) = $sht(a=>response::180::invite) + 1;
+		}
+		else if(status == "183") {
+			if($sht(a=>response::183::invite) == $null) $sht(a=>response::183::invite)= 0;
+			$sht(a=>response::183::invite) = $sht(a=>response::183::invite) + 1;
+		}
+	#!endif
+	}
+	else if($rm == "BYE") {
+		$sht(j=>$ci) = 1;
+		if(status == "407") {
+			if($sht(a=>response::407::bye) == $null) $sht(a=>response::407::bye) = 0;
+			$sht(a=>response::407::bye) = $sht(a=>response::407::bye) + 1;
+		}
+		else if(status == "401") {
+			if($sht(a=>response::401::bye) == $null) $sht(a=>response::401::bye) = 0;
+			$sht(a=>response::401::bye) = $sht(a=>response::401::bye) + 1;
+		}
+		else if(status == "200") {
+			if($sht(a=>response::200::bye) == $null) $sht(a=>response::200::bye) = 0;
+			$sht(a=>response::200::bye) = $sht(a=>response::200::bye) + 1;
+		}
+	}
+
+#!ifdef WITH_X_RTP_STATS
+	if($rm == "BYE") route(PARSE_X_RTP_STATS);
+#!endif
+
+	#Store
+	route(STORE);
+	drop;
+}
+
+#!ifdef WITH_X_RTP_STATS
+route[PARSE_X_RTP_STATS] {
+
+	if($sht(x=>$ci::callid_count)>=1) {
+		return;
+	}
+
+	if(($(hdr(X-RTP-Stat)) != $null)) {
+
+		$var(xrtp_stats) = "";
+		$var(type) 	= "x-rtp-stats";
+		$var(XHEAD)	= $(hdr(X-RTP-Stat));
+		$var(CS)	= 0;
+		$var(PS)	= 0;
+		$var(ES)	= 0;
+		$var(OS)	= 0;
+		$var(NPS)	= 0;
+		$var(SPS)	= 0;
+		$var(SO)	= 0;
+		$var(QS)	= 0;
+		$var(PR)	= 0;
+		$var(ER)	= 0;
+		$var(OR)	= 0;
+		$var(NPR)	= 0;
+		$var(SR)	= 0;
+		$var(QR)	= 0;
+		$var(PLR)	= 0;
+		$var(PLS)	= 0;
+		$var(BL)	= 0;
+		$var(LS)	= 0;
+		$var(RBDU)	= 0;
+		$var(RBDE)	= 0;
+		$var(SBDU)	= 0;
+		$var(SBDE)	= 0;
+		$var(EN)	= "";
+		$var(DE)	= "";
+		$var(JIR)	= 0;
+		$var(JIS)	= 0;
+		$var(DLME)	= 0;
+		$var(DLMI)	= 0;
+		$var(DLMA)	= 0;
+		$var(LIP)	= "";
+		$var(RIP)	= "";
+		$var(DQ)	= 0;
+		$var(DSS)	= 0;
+		$var(DS)	= 0;
+		$var(PLCS)	= 0;
+		$var(JS)	= 0;
+		$var(RLoss)	= 0;
+		$var(ELACY)	= 0;
+		$var(RVal)	= 0;
+		$var(MOS)	= 0;
+
+		if($var(XHEAD) =~ ".*CS=[0-9]") $var(CS)	= $(var(XHEAD){re.subst,/.*CS=([0-9]+).*$/\1/s});
+		if($var(XHEAD) =~ ".*PS=[0-9]") $var(PS)	= $(var(XHEAD){re.subst,/.*PS=([0-9]+).*$/\1/s});
+		if($var(XHEAD) =~ ".*ES=[0-9]") $var(ES)	= $(var(XHEAD){re.subst,/.*ES=([0-9]+).*$/\1/s});
+		if($var(XHEAD) =~ ".*OS=[0-9]") $var(OS)	= $(var(XHEAD){re.subst,/.*OS=([0-9]+).*$/\1/s});
+		if($var(XHEAD) =~ ".*SP=[0-9]") $var(NPS)	= $(var(XHEAD){re.subst,/.*SP=([0-9]+).*$/\1/s});
+		if($var(XHEAD) =~ ".*SP=[0-9]") $var(SPS)	= $(var(XHEAD){re.subst,/.*SP=([0-9]+)\/([0-9]+).*$/\2/s});
+		if($var(XHEAD) =~ ".*SO=[0-9]") $var(SO)	= $(var(XHEAD){re.subst,/.*SO=([0-9]+).*$/\1/s});
+		if($var(XHEAD) =~ ".*QS=[0-9]|[\-]") $var(QS)	= $(var(XHEAD){re.subst,/.*QS=([0-9]|[\-]+).*$/\1/s});
+		if($var(XHEAD) =~ ".*PR=[0-9]") $var(PR)	= $(var(XHEAD){re.subst,/.*PR=([0-9]+).*$/\1/s});
+		if($var(XHEAD) =~ ".*ER=[0-9]") $var(ER)	= $(var(XHEAD){re.subst,/.*ER=([0-9]+).*$/\1/s});
+		if($var(XHEAD) =~ ".*OR=[0-9]") $var(OR)	= $(var(XHEAD){re.subst,/.*OR=([0-9]+).*$/\1/s});
+		if($var(XHEAD) =~ ".*CR=[0-9]") $var(NPR)	= $(var(XHEAD){re.subst,/.*CR=([0-9]+).*$/\1/s});
+		if($var(XHEAD) =~ ".*SR=[0-9]") $var(SR)	= $(var(XHEAD){re.subst,/.*SR=([0-9]+).*$/\1/s});
+		if($var(XHEAD) =~ ".*QR=[0-9]|[\-]") $var(QR)	= $(var(XHEAD){re.subst,/.*QR=([0-9]|[\-]+).*$/\1/s});
+		if($var(XHEAD) =~ ".*PL=[0-9]") $var(PLR)	= $(var(XHEAD){re.subst,/.*PL=([0-9]+).*$/\1/s});
+		if($var(XHEAD) =~ ".*PL=[0-9]") $var(PLS)	= $(var(XHEAD){re.subst,/.*PL=([0-9]+)\,([0-9]+).*$/\2/s});
+		if($var(XHEAD) =~ ".*BL=[0-9]") $var(BL)	= $(var(XHEAD){re.subst,/.*BL=([0-9]+).*$/\1/s});
+		if($var(XHEAD) =~ ".*LS=[0-9]") $var(LS)	= $(var(XHEAD){re.subst,/.*LS=([0-9]+).*$/\1/s});
+		if($var(XHEAD) =~ ".*RB=[0-9]|[\-]") $var(RBDU)	= $(var(XHEAD){re.subst,/.*RB=([0-9]+|[\-]).*$/\1/s});
+		if($var(XHEAD) =~ ".*RB=[0-9]|[\-]") $var(RBDE)	= $(var(XHEAD){re.subst,/.*RB=([0-9]+|[\-])\/([0-9]|[\-]+).*$/\2/s});
+		if($var(XHEAD) =~ ".*SB=[0-9]|[\-]") $var(SBDU)	= $(var(XHEAD){re.subst,/.*SB=([0-9]+|[\-]).*$/\1/s});
+		if($var(XHEAD) =~ ".*SB=[0-9]|[\-]") $var(SBDE)	= $(var(XHEAD){re.subst,/.*SB=([0-9]+|[\-])\/([0-9]|[\-]+).*$/\2/s});
+		if($var(XHEAD) =~ ".*EN=[A-Za-z0-9]") $var(EN)	= $(var(XHEAD){re.subst,/.*EN=([A-Za-z0-9]+).*$/\1/s});
+		if($var(XHEAD) =~ ".*DE=[A-Za-z0-9]") $var(DE)	= $(var(XHEAD){re.subst,/.*DE=([A-Za-z0-9]+).*$/\1/s});
+		if($var(XHEAD) =~ ".*JI=[0-9]") $var(JIR)	= $(var(XHEAD){re.subst,/.*JI=([0-9]+).*$/\1/s});
+		if($var(XHEAD) =~ ".*JI=[0-9]") $var(JIS)	= $(var(XHEAD){re.subst,/.*JI=([0-9]+)\,([0-9]+).*$/\2/s});
+		if($var(XHEAD) =~ ".*DL=[0-9]") $var(DLME)	= $(var(XHEAD){re.subst,/.*DL=([0-9]+).*$/\1/s});
+		if($var(XHEAD) =~ ".*DL=[0-9]") $var(DLMI)	= $(var(XHEAD){re.subst,/.*DL=([0-9]+)\,([0-9]+).*$/\2/s});
+		if($var(XHEAD) =~ ".*DL=[0-9]") $var(DLMA)	= $(var(XHEAD){re.subst,/.*DL=([0-9]+)\,([0-9]+)\,([0-9]+).*$/\3/s});
+		if($var(XHEAD) =~ ".*IP=[0-9]") $var(LIP)	= $(var(XHEAD){re.subst,/.*IP=([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}).*$/\1/s});
+		if($var(XHEAD) =~ ".*IP=[0-9]") $var(RIP)	= $(var(XHEAD){re.subst,/.*IP=([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\:[0-9]+)\,([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}).*$/\2/s});
+		if ($var(QS) == "-") $var(QS)	= 0;
+		if ($var(QR) == "-") $var(QR)	= 0;
+		if ($var(RBDU) == "-") $var(RBDU)	= 0;
+		if ($var(RBDE) == "-") $var(RBDE)	= 0;
+		if ($var(SBDU) == "-") $var(SBDU)	= 0;
+		if ($var(SBDE) == "-") $var(SBDE)	= 0;
+
+
+		# Since kamailio core cannot handle float values we shift them by 10^3
+		$var(RLoss)	= ((($var(PLR) + $var(PLS)) * 250000) / ($var(PS) + $var(PR)));
+		$var(ELACY)	= ((($var(JIR) * 2) + $var(DLMI) + 20) * 1000);
+
+		if ($var(ELACY) < 160000) {
+			$var(RVal) = (93200 - ($var(ELACY) / 40));
+		}
+		else {
+			$var(RVal) = (93200 - (($var(ELACY) - 120000) / 10));
+		}
+
+		$var(RVal)	= $var(RVal) - $var(RLoss);
+		$var(MOS1)	= ((($var(RVal) / 1000) * 35) + 1000);
+		$var(MOS2)	= (100000 - $var(RVal)) * ($var(RVal) - 60000);
+		$var(MOS3)	= $var(MOS2) / 142857;
+		$var(MOS4)	= ($var(MOS3) * $var(RVal)) / 1000000;
+		$var(MOS)	= $var(MOS1) + $var(MOS4);
+
+		#xlog("R=$var(RVal) MOS1=$var(MOS1) MOS2=$var(MOS2) MOS3=$var(MOS3) MOS4=$var(MOS4) MOS=$var(MOS)");
+
+		if ($var(MOS) < 1000) $var(MOS) = 1000;
+
+		if(($(hdr(X-RTP-Stat-Add)) != $null)){
+			$var(XADD) = $(hdr(X-RTP-Stat-Add));
+			if($var(XADD) =~ ".*DQ=[0-9]") $var(DQ) = $(var(XADD){re.subst,/.*DQ=([0-9]+).*$/\1/s});
+			if($var(XADD) =~ ".*DSS=[0-9]") $var(DSS) = $(var(XADD){re.subst,/.*DSS=([0-9]+).*$/\1/s});
+			if($var(XADD) =~ ".*DS=[0-9]") $var(DS) = $(var(XADD){re.subst,/.*DS=([0-9]+).*$/\1/s});
+			if($var(XADD) =~ ".*PLCS=[0-9]") $var(PLCS) = $(var(XADD){re.subst,/.*PLCS=([0-9]+).*$/\1/s});
+			if($var(XADD) =~ ".*JS=[0-9]") $var(JS) = $(var(XADD){re.subst,/.*JS=([0-9]+).*$/\1/s});
+		}
+		jansson_set("string", "host", "$HN(n)", "$var(tmp_json)");
+		jansson_set("string", "ID", "$ci", "$var(tmp_json)");
+		jansson_set("string", "From", "$fU", "$var(tmp_json)");
+		jansson_set("string", "To", "$tU", "$var(tmp_json)");
+		jansson_set("integer", "CallSetupTime", "$var(CS)", "$var(tmp_json)");
+		jansson_set("integer", "AudioPacketsSent", "$var(PS)", "$var(tmp_json)");
+		jansson_set("integer", "ExpectedPacketsSent", "$var(ES)", "$var(tmp_json)");
+		jansson_set("integer", "AudioOctetsSent", "$var(OS)", "$var(tmp_json)");
+		jansson_set("integer", "ComfortNoisePacketsSent", "$var(NPS)", "$var(tmp_json)");
+		jansson_set("integer", "SilencePacketsSent", "$var(SPS)", "$var(tmp_json)");
+		jansson_set("integer", "SilenceOctetsSent", "$var(SO)", "$var(tmp_json)");
+		jansson_set("integer", "QuietPacketsSent", "$var(QS)", "$var(tmp_json)");
+		jansson_set("integer", "AudioPacketsReceived", "$var(PR)", "$var(tmp_json)");
+		jansson_set("integer", "ExpectedPacketsReceived", "$var(ER)", "$var(tmp_json)");
+		jansson_set("integer", "AudioOctetsReceived", "$var(OR)", "$var(tmp_json)");
+		jansson_set("integer", "ComfortNoisePacketsReceived", "$var(NPR)", "$var(tmp_json)");
+		jansson_set("integer", "ComfortNoiseOctetsReceived", "$var(SR)", "$var(tmp_json)");
+		jansson_set("integer", "QuietPacketsReceived", "$var(QR)", "$var(tmp_json)");
+		jansson_set("integer", "ReceivePacketsLost", "$var(PLR)", "$var(tmp_json)");
+		jansson_set("integer", "SendPacketsLost", "$var(PLS)", "$var(tmp_json)");
+		jansson_set("integer", "ReceiveMaxBurstLost", "$var(BL)", "$var(tmp_json)");
+		jansson_set("integer", "NumLostSequences", "$var(LS)", "$var(tmp_json)");
+		jansson_set("integer", "ReceiveBurstDuration", "$var(RBDU)", "$var(tmp_json)");
+		jansson_set("integer", "ReceiveBurstDensity", "$var(RBDE)", "$var(tmp_json)");
+		jansson_set("integer", "SendBurstDuration", "$var(SBDU)", "$var(tmp_json)");
+		jansson_set("integer", "SendBurstDensity", "$var(SBDE)", "$var(tmp_json)");
+		jansson_set("string", "UsedEncoder", "$var(EN)", "$var(tmp_json)");
+		jansson_set("string", "UsedDecoder", "$var(DE)", "$var(tmp_json)");
+		jansson_set("integer", "ReceiveJitter", "$var(JIR)", "$var(tmp_json)");
+		jansson_set("integer", "SendJitter", "$var(JIS)", "$var(tmp_json)");
+		jansson_set("integer", "RttMean", "$var(DLME)", "$var(tmp_json)");
+		jansson_set("integer", "RttMin", "$var(DLMI)", "$var(tmp_json)");
+		jansson_set("integer", "RttMax", "$var(DLMA)", "$var(tmp_json)");
+		jansson_set("string", "LocalIP", "$var(LIP)", "$var(tmp_json)");
+		jansson_set("string", "RemoteIP", "$var(RIP)", "$var(tmp_json)");
+		jansson_set("integer", "Mos", "$var(MOS)", "$var(tmp_json)");
+		jansson_set("integer", "DecoderQueue", "$var(DQ)", "$var(tmp_json)");
+		jansson_set("integer", "DropSilenceSample", "$var(DSS)", "$var(tmp_json)");
+		jansson_set("integer", "DropSamples", "$var(DS)", "$var(tmp_json)");
+		jansson_set("integer", "PLCSamples", "$var(PLCS)", "$var(tmp_json)");
+		jansson_set("integer", "JitterSamples", "$var(JS)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		jansson_set("string", "timestamp", "$timef(%Y-%m-%dT%TZ)", "$var(tmp_json)");
+		$var(xrtp_stats) = $var(xrtp_stats) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(xrtp_stats) = $var(xrtp_stats) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		$var(body) = $var(xrtp_stats);
+		route(SEND_ES_DATA);
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$TS+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "X-RTP-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		if($sht(x=>$ci::callid_count) == $null) $sht(x=>$ci::callid_count) = 0;
+		$sht(x=>$ci::callid_count) = $sht(x=>$ci::callid_count) + 1;
+	}
+}
+#!endif
+
+route[KILL_VICIOUS] {
+	xlog("Kill-Vicious ! si : $si ru : $ru ua : $ua\n");
+	return;
+}
+
+route[STATS_BY_IP] {
+	if($sht(c=>$rs::$sel(via[1].host)) == $null) $sht(c=>$rs::$sel(via[1].host)) = 0;
+	$sht(c=>$rs::$sel(via[1].host)) = $sht(c=>$rs::$sel(via[1].host)) + 1;
+}
+
+route[PARSE_STATS_IP] {
+
+	$var(alarm_data) = "";
+	$var(type) = "alarm_data";
+	sht_iterator_start("i1", "c");
+	while(sht_iterator_next("i1")) {
+		$var(sipcode) = $(shtitkey(i1){s.select,0,:});
+		$var(ip) = $(shtitkey(i1){s.select,2,:});
+		if($shtitval(i1) > $avp($var(sipcode))) {
+			#sql_query("cb", "INSERT INTO alarm_data (create_date, type, total, source_ip, description) VALUES(NOW(), 'Too Many $var(sipcode)', $shtitval(i1), '$var(ip)', 'Too Many $var(sipcode)')");
+			jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+			jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+			jansson_set("string", "source_ip", "$var(ip)", "$var(tmp_json)");
+			jansson_set("string", "type", "Too Many $var(sipcode)", "$var(tmp_json)");
+			jansson_set("integer", "value", "$shtitval(i1)", "$var(tmp_json)");
+
+			#!ifdef TO_ELASTIC
+			$var(alarm_data) = $var(alarm_data) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+			$var(alarm_data) = $var(alarm_data) + $var(tmp_json) + "\n";
+			$var(tmp_json) = 0;
+			#!endif
+
+			#!ifdef TO_GRAYLOG
+			jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+			jansson_set("string", "short_message", "Homer-Alarm", "$var(tmp_json)");
+			$var(graylog_json) = $var(tmp_json);
+			$var(tmp_json) = 0;
+			route(SEND_ES_DATA);
+			$var(graylog_json) = 0;
+			#!endif
+		}
+	}
+	sht_iterator_end("i1");
+	sht_rm_name_re("c=>.*");
+
+	$var(body) = $var(alarm_data);
+	route(SEND_ES_DATA);
+}
+
+route[TIMER_STATS] {
+
+	#xlog("timer routine: time is $TS\n");
+
+	$var(curtime) = $TS;
+	$var(gentime) = $var(curtime) - CHECK_TIMER_INTERVAL;
+
+	$var(t_mdate) = "FROM_UNIXTIME(" + $var(curtime) + ", '%Y-%m-%d %H:%i:00')";
+	$var(f_mdate) = "FROM_UNIXTIME(" + $var(gentime) + ", '%Y-%m-%d %H:%i:00')";
+
+	$var(isotime) = $timef(%Y-%m-%dT%TZ);
+	$var(host) = $HN(n);
+
+	route(CHECK_ALARM);
+	route(CHECK_STATS);
+}
+
+route[SEND_ALARM] {
+
+	exec_msg('echo "Value: $var(thvalue), Type: $var(atype), Desc: $var(aname)" | mail -s "Homer Alarm $var(atype) - $var(thvalue)" $var(aemail) ');
+}
+
+route[CHECK_ALARM] {
+
+	#POPULATE ALARM THRESHOLDS
+	#Homer 5 sql schema
+	sql_query("cb", "SELECT type,value,name,notify,email FROM alarm_config WHERE NOW() between startdate AND stopdate AND active = 1", "ra");
+	if($dbr(ra=>rows)>0)
+	{
+		$var(alarm_data) = "";
+		$var(type) = "alarm_data";
+
+		$var(i) = 0;
+		while($var(i)<$dbr(ra=>rows))
+		{
+			$var(atype) = $dbr(ra=>[$var(i),0]);
+			$var(avalue) = $dbr(ra=>[$var(i),1]);
+			$var(aname) = $dbr(ra=>[$var(i),2]);
+			$var(anotify) = $(dbr(ra=>[$var(i),3]){s.int});
+			$var(aemail) = $dbr(ra=>[$var(i),4]);
+			$avp($var(atype)) = $var(avalue);
+
+			if($sht(a=>alarm::$var(atype)) != $null) {
+				$var(thvalue) = $sht(a=>alarm::$var(atype));
+			}
+
+			#If Alarm - go here
+			if($var(thvalue) > $var(avalue)) {
+				#sql_query("cb", "INSERT INTO alarm_data (create_date, type, total, description) VALUES(NOW(), '$var(aname)', $var(thvalue), '$var(aname) - $var(atype)');");
+
+				jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+				jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+				jansson_set("string", "type", "$var(aname)", "$var(tmp_json)");
+				jansson_set("integer", "value", "$var(thvalue)", "$var(tmp_json)");
+
+				#!ifdef TO_ELASTIC
+				$var(alarm_data) = $var(alarm_data) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+				$var(alarm_data) = $var(alarm_data) + $var(tmp_json) + "\n";
+				$var(tmp_json) = 0;
+				#!endif
+
+				#!ifdef TO_GRAYLOG
+				jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+				jansson_set("string", "short_message", "Homer-Alarm", "$var(tmp_json)");
+				$var(graylog_json) = $var(tmp_json);
+				$var(tmp_json) = 0;
+				route(SEND_ES_DATA);
+				$var(graylog_json) = 0;
+				#!endif
+
+				#Notify
+				if($var(anotify) == 1) {
+					route(SEND_ALARM);
+				}
+			}
+
+			#Alarm for Scanner;
+			if($var(atype) == "scanner") {
+				$var(count) = 0;
+
+				sht_iterator_start("i1", "h");
+				while(sht_iterator_next("i1")) {
+					if ($shtitval(i1) >= $var(avalue)) {
+						$var(count) = $var(count) + 1;
+						$var(ip) = $(shtitkey(i1){s.select,0,=});
+						$var(ua) = $(shtitkey(i1){s.select,1,=});
+						jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+						jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+						jansson_set("string", "source_ip", "$var(ip)", "$var(tmp_json)");
+						jansson_set("string", "useragent", "$var(ua)", "$var(tmp_json)");
+						jansson_set("string", "type", "scanner", "$var(tmp_json)");
+						jansson_set("integer", "value", "$shtitval(i1)", "$var(tmp_json)");
+
+						#!ifdef TO_ELASTIC
+						$var(alarm_data) = $var(alarm_data) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+						$var(alarm_data) = $var(alarm_data) + $var(tmp_json) + "\n";
+						$var(tmp_json) = 0;
+						#!endif
+
+						#!ifdef TO_GRAYLOG
+						jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+						jansson_set("string", "short_message", "Homer-Scanner", "$var(tmp_json)");
+						jansson_set("string", "full_message", ""+@msg+"", "$var(tmp_json)");
+						$var(graylog_json) = $var(tmp_json);
+						$var(tmp_json) = 0;
+						route(SEND_ES_DATA);
+						$var(graylog_json) = 0;
+						#!endif
+					}
+				}
+
+				sht_iterator_end("i1");
+				sht_rm_name_re("h=>.*");
+
+				#sql_query("cb", "DELETE FROM alarm_data_mem WHERE type='scanner' AND total < $var(avalue)");
+				if(($var(count) > $var(avalue)) &&	($var(anotify) == 1))
+				{
+					route(SEND_ALARM);
+					#sql_query("cb", "SELECT * FROM alarm_data_mem WHERE type='scanner' AND total	>= $var(avalue) LIMIT 2", "rd");
+					#if($dbr(rd=>rows) > 0) {
+					#	route(SEND_ALARM);
+					#}
+					#sql_result_free("rd");
+				}
+			}
+
+			$sht(a=>alarm::$var(atype)) = 0;
+			$var(i) = $var(i) + 1;
+		}
+
+		$var(body) = $var(alarm_data);
+		route(SEND_ES_DATA);
+	}
+
+	sql_result_free("ra");
+
+	#if(sql_xquery("cb", "select type,value,name,notify,email from alarm_config WHERE startdate > NOW() AND stopdate < NOW() AND active = 1", "trigger") == 1) {
+	#	 $var(i) = 0;
+	#	 while($xavp(trigger[$var(i)]) != $null) {
+	#		 $avp($xavp(trigger[$var(i)]=>type)) = $xavp(trigger[$var(i)]=>value);
+	#		$avp($xavp(trigger[$var(i)]=>type)+"_notify") = $xavp(trigger[$var(i)]=>notify);
+	#		$avp($xavp(trigger[$var(i)]=>type)+"_email") = $xavp(trigger[$var(i)]=>email);
+	#		$var(i) = $var(i) + 1;
+	#	 }
+	#}
+
+	route(PARSE_STATS_IP);
+
+	#delete old alarms
+	#sql_query("cb", "DELETE FROM alarm_data WHERE create_date < DATE_SUB(NOW(), INTERVAL 5 DAY)");
+}
+
+route[CHECK_STATS] {
+
+	#ALARM SCANNERS
+	#sql_query("cb", "INSERT INTO alarm_data (create_date, type, total, source_ip, description) SELECT create_date, type, total, source_ip, description FROM alarm_data_mem;");
+	#sql_query("cb", "TRUNCATE TABLE alarm_data_mem");
+
+	#STATS Useragent
+	#sql_query("cb", "INSERT INTO stats_useragent (from_date, to_date, useragent, method, total) SELECT $var(f_mdate) as from_date, $var(t_mdate) as to_date, useragent, method, total FROM stats_useragent_mem;");
+	#sql_query("cb", "TRUNCATE TABLE stats_useragent_mem");
+	$var(stats_useragent) = "";
+	$var(type) = "stats_useragent";
+
+	sht_iterator_start("i1", "g");
+	while(sht_iterator_next("i1")) {
+		$var(ua) = $(shtitkey(i1){s.select,0,=});
+		$var(method) = $(shtitkey(i1){s.select,1,=});
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "useragent", "$var(ua)", "$var(tmp_json)");
+		jansson_set("string", "method", "$var(method)", "$var(tmp_json)");
+		jansson_set("integer", "value", "$shtitval(i1)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_useragent) = $var(stats_useragent) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_useragent) = $var(stats_useragent) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+	}
+
+	sht_iterator_end("i1");
+	sht_rm_name_re("g=>.*");
+
+	$var(body) = $var(stats_useragent);
+	route(SEND_ES_DATA);
+
+	#STATS IP
+	#sql_query("cb", "INSERT INTO stats_ip (from_date, to_date, method, source_ip, total) SELECT $var(f_mdate) as from_date, $var(t_mdate) as to_date, method, source_ip, total FROM stats_ip_mem;");
+	#sql_query("cb", "TRUNCATE TABLE stats_ip_mem");
+	$var(stats_ip) = "";
+	$var(type) = "stats_ip";
+
+	sht_iterator_start("i1", "e");
+	while(sht_iterator_next("i1")) {
+		$var(ip) = $(shtitkey(i1){s.select,0,-});
+		$var(method) = $(shtitkey(i1){s.select,1,-});
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "source_ip", "$var(ip)", "$var(tmp_json)");
+		jansson_set("string", "method", "$var(method)", "$var(tmp_json)");
+		jansson_set("integer", "value", "$shtitval(i1)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_ip) = $var(stats_ip) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_ip) = $var(stats_ip) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+	}
+
+	sht_iterator_end("i1");
+	sht_rm_name_re("e=>.*");
+
+	$var(body) = $var(stats_ip);
+	route(SEND_ES_DATA);
+
+#!ifdef WITH_HOMER_GEO
+	#sql_query("cb", "INSERT INTO stats_geo (from_date, to_date, method, country, lat, lon, total) SELECT $var(f_mdate) as from_date, $var(t_mdate) as to_date, method, country, lat, lon, total FROM stats_geo_mem;");
+	#sql_query("cb", "TRUNCATE TABLE stats_geo_mem");
+
+	$var(stats_geo) = "";
+	$var(type) = "stats_geo";
+
+	sht_iterator_start("i1", "f");
+	while(sht_iterator_next("i1")) {
+		$var(method) = $(shtitkey(i1){s.select,0,=});
+		$var(country) = $(shtitkey(i1){s.select,1,=});
+		$var(lat) = $(shtitkey(i1){s.select,2,=});
+		$var(lon) = $(shtitkey(i1){s.select,3,=});
+		#sql_query("cb", "INSERT INTO stats_generic (from_date, to_date, type, total) VALUES($var(f_date), $var(t_date), '$var(key)', $shtitval(i1)) ON DUPLICATE KEY UPDATE total=(total+$shtitval(i1))/2");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "country", "$var(country)", "$var(tmp_json)");
+		jansson_set("string", "method", "$var(method)", "$var(tmp_json)");
+		jansson_set("string", "location_geo", "$var(lat), $var(lon)", "$var(tmp_json)");
+		jansson_set("integer", "value", "$shtitval(i1)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_geo) = $var(stats_geo) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_geo) = $var(stats_geo) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+	}
+
+	sht_iterator_end("i1");
+	sht_rm_name_re("f=>.*");
+
+	$var(body) = $var(stats_geo);
+	route(SEND_ES_DATA);
+#!endif
+
+	$var(tmp_json) = 0;
+	#INSERT SQL STATS
+	#Packet HEP stats
+	$var(stats_data) = "";
+	$var(type) = "stats_data";
+
+	if($sht(a=>packet::count) != $null && $sht(a=>packet::count) > 0) {
+		#sql_query("cb", "INSERT INTO stats_data (from_date, to_date, type, total) VALUES($var(f_date), $var(t_mdate), 'packet_count', $sht(a=>packet::count)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>packet::count)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "name", "packet_count", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>packet::count)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_data) = $var(stats_data) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_data) = $var(stats_data) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>packet::count) = 0;
+	}
+	if($sht(a=>packet::size) != $null && $sht(a=>packet::size) > 0) {
+		#sql_query("cb", "INSERT INTO stats_data (from_date, to_date, type, total) VALUES($var(f_date), $var(t_date), 'packet_size', $sht(a=>packet::size)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>packet::size)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "name", "packet_size", "$var(tmp_json)");
+		jansson_set("integer", "bytes", "$sht(a=>packet::size)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_data) = $var(stats_data) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_data) = $var(stats_data) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>packet::size) = 0;
+	}
+
+	#ASR
+	$var(asr) = 0;
+	#if($sht(a=>response::200::invite) > 0) {
+	if($sht(a=>method::invite) > 0) {
+		if($sht(a=>response::407::invite) == $null) $sht(a=>response::407::invite) = 0;
+		if($sht(a=>response::200::invite) == $null) $sht(a=>response::200::invite) = 0;
+		$var(d) = $sht(a=>method::invite) - $sht(a=>response::407::invite);
+		if($var(d) > 0) {
+			$var(asr) =	$sht(a=>response::200::invite) * 100 / $var(d);
+			if($var(asr) > 100)	$var(asr) = 100;
+		}
+	}
+
+	#Stats DATA
+	#sql_query("cb", "INSERT INTO stats_data (from_date, to_date, type, total) VALUES($var(f_date), $var(t_date), 'asr', $var(asr)) ON DUPLICATE KEY UPDATE total=(total+$var(asr))/2");
+	jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+	jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+	jansson_set("string", "name", "asr", "$var(tmp_json)");
+	jansson_set("integer", "value", "$var(asr)", "$var(tmp_json)");
+
+	#!ifdef TO_ELASTIC
+	$var(stats_data) = $var(stats_data) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+	$var(stats_data) = $var(stats_data) + $var(tmp_json) + "\n";
+	$var(tmp_json) = 0;
+	#!endif
+
+	#!ifdef TO_GRAYLOG
+	jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+	jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+	$var(graylog_json) = $var(tmp_json);
+	$var(tmp_json) = 0;
+	route(SEND_ES_DATA);
+	$var(graylog_json) = 0;
+	#!endif
+
+	#NER
+	$var(ner) = 0;
+	#if($sht(a=>response::200::invite) > 0 || $sht(a=>stats::bad::invite) > 0) {
+	if($sht(a=>method::invite) > 0) {
+
+		if($sht(a=>response::200::invite) == $null) $sht(a=>response::200::invite) = 0;
+		if($sht(a=>response::bad::invite) == $null) $sht(a=>response::bad::invite) = 0;
+		if($sht(a=>response::407::invite) == $null) $sht(a=>response::407::invite) = 0;
+
+		$var(d) = $sht(a=>method::invite) - $sht(a=>response::407::invite);
+
+		if($var(d) > 0) {
+			$var(ner) = ($sht(a=>response::200::invite) + $sht(a=>stats::bad::invite)) * 100 / $var(d);
+			if($var(ner) > 100)	$var(ner) = 100;
+		}
+	}
+
+	#sql_query("cb", "INSERT INTO stats_data (from_date, to_date, type, total) VALUES($var(f_date), $var(t_date), 'ner', $var(ner)) ON DUPLICATE KEY UPDATE total=(total+$var(ner))/2");
+	jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+	jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+	jansson_set("string", "name", "ner", "$var(tmp_json)");
+	jansson_set("integer", "value", "$var(ner)", "$var(tmp_json)");
+
+	#!ifdef TO_ELASTIC
+	$var(stats_data) = $var(stats_data) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+	$var(stats_data) = $var(stats_data) + $var(tmp_json) + "\n";
+	$var(tmp_json) = 0;
+	#!endif
+
+	#!ifdef TO_GRAYLOG
+	jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+	jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+	$var(graylog_json) = $var(tmp_json);
+	$var(tmp_json) = 0;
+	route(SEND_ES_DATA);
+	$var(graylog_json) = 0;
+	#!endif
+
+	#SDR
+	$var(sdr) = 0;
+	if($sht(a=>method::invite) > 0) {
+		if($sht(a=>response::407::invite) == $null) $sht(a=>response::407::invite) = 0;
+		$var(d) = $sht(a=>method::invite) - $sht(a=>response::407::invite);
+
+		if($var(d) > 0) {
+			$var(sdr) = $sht(a=>stats::sd) * 100 / $var(d);
+			if($var(sdr) > 100)	$var(sdr) = 100;
+		}
+	}
+
+	#sql_query("cb", "INSERT INTO stats_data (from_date, to_date, type, total) VALUES($var(f_date), $var(t_date), 'sdr', $var(sdr)) ON DUPLICATE KEY UPDATE total=(total+$var(sdr))/2");
+	jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+	jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+	jansson_set("string", "name", "sdr", "$var(tmp_json)");
+	jansson_set("integer", "value", "$var(sdr)", "$var(tmp_json)");
+
+	#!ifdef TO_ELASTIC
+	$var(stats_data) = $var(stats_data) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+	$var(stats_data) = $var(stats_data) + $var(tmp_json) + "\n";
+	$var(tmp_json) = 0;
+	#!endif
+
+	#!ifdef TO_GRAYLOG
+	jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+	jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+	$var(graylog_json) = $var(tmp_json);
+	$var(tmp_json) = 0;
+	route(SEND_ES_DATA);
+	$var(graylog_json) = 0;
+	#!endif
+
+	#SCR
+	$var(scr) = 0;
+	if($shtcn(i=>**) > 0 && $shtcn(j=>**) > 0 ) {
+		# completed sessions with bye * 100 / all session invites
+		$var(scr) = $shtcn(j=>**) * 100 / $shtcn(i=>**);
+		if($var(scr) > 100)	$var(scr) = 100;
+	}
+
+	#sql_query("cb", "INSERT INTO stats_data (from_date, to_date, type, total) VALUES($var(f_date), $var(t_date), 'scr', $var(scr)) ON DUPLICATE KEY UPDATE total=(total+$var(scr))/2");
+	jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+	jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+	jansson_set("string", "name", "scr", "$var(tmp_json)");
+	jansson_set("integer", "value", "$var(scr)", "$var(tmp_json)");
+
+	#!ifdef TO_ELASTIC
+	$var(stats_data) = $var(stats_data) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+	$var(stats_data) = $var(stats_data) + $var(tmp_json) + "\n";
+	$var(tmp_json) = 0;
+	#!endif
+
+	#!ifdef TO_GRAYLOG
+	jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+	jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+	$var(graylog_json) = $var(tmp_json);
+	$var(tmp_json) = 0;
+	route(SEND_ES_DATA);
+	$var(graylog_json) = 0;
+	#!endif
+
+	#SDF
+	if($sht(a=>stats::sdf) != $null && $sht(a=>stats::sdf) > 0) {
+		#sql_query("cb", "INSERT INTO stats_data (from_date, to_date, type, total) VALUES($var(f_date), $var(t_date), 'sdf', $sht(a=>stats::sdf)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>stats::sdf)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "name", "sdf", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>stats::sdf)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_data) = $var(stats_data) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_data) = $var(stats_data) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>stats::sdf) = 0;
+	}
+
+	#ISA
+	if($sht(a=>stats::isa) != $null && $sht(a=>stats::isa) > 0) {
+		#sql_query("cb", "INSERT INTO stats_data (from_date, to_date, type, total) VALUES($var(f_date), $var(t_date), 'isa', $sht(a=>stats::isa)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>stats::isa)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "name", "isa", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>stats::isa)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_data) = $var(stats_data) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_data) = $var(stats_data) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>stats::isa) = 0;
+	}
+
+	#SD
+	if($sht(a=>stats::sd) != $null && $sht(a=>stats::sd) > 0) {
+		#sql_query("cb", "INSERT INTO stats_data (from_date, to_date, type, total) VALUES($var(f_date), $var(t_date), 'isa', $sht(a=>stats::sd)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>stats::sd)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "name", "sd", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>stats::sd)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_data) = $var(stats_data) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_data) = $var(stats_data) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>stats::sd) = 0;
+	}
+
+	#SSR
+	if($sht(a=>stats::ssr) != $null && $sht(a=>stats::ssr) > 0) {
+		#sql_query("cb", "INSERT INTO stats_data (from_date, to_date, type, total) VALUES($var(f_date), $var(t_date), 'ssr', $sht(a=>stats::ssr)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>stats::ssr)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "name", "ssr", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>stats::ssr)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_data) = $var(stats_data) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_data) = $var(stats_data) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>stats::ssr) = 0;
+	}
+
+	# Send bulk stats metrics
+	$var(body) = $var(stats_data);
+	route(SEND_ES_DATA);
+
+	$var(stats_method) = "";
+	$var(type) = "stats_method";
+
+	# Reset call-id's associated with invite & bye message
+	sht_reset("i");
+	sht_reset("j");
+
+	#INVITE
+	if($sht(a=>method::reinvite) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, totag, total) VALUES($var(f_date), $var(t_date),'INVITE', 1, $sht(a=>method::reinvite)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>method::reinvite)");
+
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "REINVITE", "$var(tmp_json)");
+		jansson_set("true", "totag", 1, "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>method::reinvite)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>method::reinvite) = 0;
+	}
+
+	#INVITE
+	if($sht(a=>method::invite) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, total) VALUES($var(f_date), $var(t_date), 'INVITE', $sht(a=>method::invite)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>method::invite)");
+
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "INVITE", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>method::invite)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>method::invite) = 0;
+	}
+
+	#INVITE AUTH
+	if($sht(a=>method::invite::auth) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, auth, total) VALUES($var(f_date), $var(t_date), 'INVITE', 1, $sht(a=>method::invite::auth)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>method::invite::auth)");
+
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "AUTH INVITE", "$var(tmp_json)");
+		jansson_set("true", "auth", 1, "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>method::invite::auth)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>method::invite::auth) = 0;
+	}
+
+	#REGISTER
+	if($sht(a=>method::register) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, total) VALUES($var(f_date), $var(t_date), 'REGISTER', $sht(a=>method::register)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>method::register)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "REGISTER", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>method::register)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>method::register) = 0;
+	}
+
+	#REGISTER AUTH
+	if($sht(a=>method::register::auth) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, auth, total) VALUES($var(f_date), $var(t_date), 'REGISTER', 1, $sht(a=>method::register::auth)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>method::register::auth)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "AUTH REGISTER", "$var(tmp_json)");
+		jansson_set("true", "auth", 1, "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>method::register::auth)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>method::register::auth) = 0;
+	}
+
+	#BYE
+	if($sht(a=>method::bye) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, total) VALUES($var(f_date), $var(t_date), 'BYE', $sht(a=>method::bye)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>method::bye)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "BYE", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>method::bye)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>method::bye) = 0;
+	}
+
+	#CANCEL
+	if($sht(a=>method::cancel) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, total) VALUES($var(f_date), $var(t_date), 'CANCEL', $sht(a=>method::cancel)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>method::cancel)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "CANCEL", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>method::cancel)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>method::cancel) = 0;
+	}
+
+	#OPTIONS
+	if($sht(a=>method::options) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, total) VALUES($var(f_date), $var(t_date), 'OPTIONS', $sht(a=>method::options)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>method::options)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "OPTIONS", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>method::options)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>method::options) = 0;
+	}
+
+	#PUBLISH
+	if($sht(a=>method::publish) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, total) VALUES($var(f_date), $var(t_date), 'PUBLISH', $sht(a=>method::publish)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>method::publish)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "PUBLISH", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>method::publish)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>method::publish) = 0;
+	}
+
+#!ifdef WITH_STATISTIC_METHOD_EXTRA
+	#ACK
+	if($sht(a=>method::ack) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, total) VALUES($var(f_date), $var(t_date), 'ACK', $sht(a=>method::ack)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>method::ack)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "ACK", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>method::ack)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>method::ack) = 0;
+	}
+
+	#INFO
+	if($sht(a=>method::info) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, total) VALUES($var(f_date), $var(t_date), 'info', $sht(a=>method::info)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>method::info)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "INFO", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>method::info)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>method::info) = 0;
+	}
+
+	#MESSAGE
+	if($sht(a=>method::message) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, total) VALUES($var(f_date), $var(t_date), 'message', $sht(a=>method::message)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>method::message)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "MESSAGE", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>method::message)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>method::message) = 0;
+	}
+
+	#NOTIFY
+	if($sht(a=>method::notify) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, total) VALUES($var(f_date), $var(t_date), 'notify', $sht(a=>method::notify)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>method::notify)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "NOTIFY", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>method::notify)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>method::notify) = 0;
+	}
+
+	#PRACK
+	if($sht(a=>method::prack) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, total) VALUES($var(f_date), $var(t_date), 'prack', $sht(a=>method::prack)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>method::prack)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "PRACK", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>method::prack)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>method::prack) = 0;
+	}
+
+	#SUBSCRIBE
+	if($sht(a=>method::subscribe) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, total) VALUES($var(f_date), $var(t_date), 'subscribe', $sht(a=>method::subscribe)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>method::subscribe)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "SUBSCRIBE", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>method::subscribe)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>method::subscribe) = 0;
+	}
+
+	#UNKNOWN
+	if($sht(a=>method::unknown) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, total) VALUES($var(f_date), $var(t_date), 'UNKNOWN', $sht(a=>method::unknown)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>method::unknown)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "UNKNOWN", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>method::unknown)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>method::unknown) = 0;
+	}
+#!endif
+
+	#REFER
+	if($sht(a=>method::refer) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, total) VALUES($var(f_date), $var(t_date), 'REFER', $sht(a=>method::refer)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>method::refer)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "REFER", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>method::refer)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>method::refer) = 0;
+	}
+
+	#UPDATE
+	if($sht(a=>method::update) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, total) VALUES($var(f_date), $var(t_date), 'UPDATE', $sht(a=>method::update)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>method::update)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "UPDATE", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>method::update)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>method::update) = 0;
+	}
+
+	#RESPONSES
+
+	#300
+	if($sht(a=>response::300) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, total) VALUES($var(f_date), $var(t_date), '300', $sht(a=>response::300)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>response::300)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "300", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>response::300)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>response::300) = 0;
+	}
+
+	#407 INVITE
+	if($sht(a=>response::407::invite) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, cseq, total) VALUES($var(f_date), $var(t_date), '407', 'INVITE', $sht(a=>response::407::invite)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>response::407::invite)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "407", "$var(tmp_json)");
+		jansson_set("string", "cseq", "INVITE", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>response::407::invite)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>response::407::invite) = 0;
+	}
+
+	#401 INVITE
+	if($sht(a=>response::401::invite) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, cseq, total) VALUES($var(f_date), $var(t_date), '401', 'INVITE', $sht(a=>response::401::invite)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>response::401::invite)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "401", "$var(tmp_json)");
+		jansson_set("string", "cseq", "INVITE", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>response::401::invite)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>response::401::invite) = 0;
+	}
+
+	#488 INVITE
+	if($sht(a=>response::488::invite) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, cseq, total) VALUES($var(f_date), $var(t_date), '488', 'INVITE', $sht(a=>response::488::invite)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>response::488::invite)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "488", "$var(tmp_json)");
+		jansson_set("string", "cseq", "INVITE", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>response::488::invite)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>response::488::invite) = 0;
+	}
+
+#!ifdef WITH_STATISTIC_INVITE_1XX
+	#100 INVITE
+	if($sht(a=>response::100::invite) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, cseq, total) VALUES($var(f_date), $var(t_date), '100', 'INVITE', $sht(a=>response::100::invite)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>response::100::invite)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "100", "$var(tmp_json)");
+		jansson_set("string", "cseq", "INVITE", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>response::100::invite)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>response::100::invite) = 0;
+	}
+
+	#180 INVITE
+	if($sht(a=>response::180::invite) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, cseq, total) VALUES($var(f_date), $var(t_date), '180', 'INVITE', $sht(a=>response::180::invite)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>response::180::invite)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "180", "$var(tmp_json)");
+		jansson_set("string", "cseq", "INVITE", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>response::180::invite)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>response::180::invite) = 0;
+	}
+
+	#183 INVITE
+	if($sht(a=>response::183::invite) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, cseq, total) VALUES($var(f_date), $var(t_date), '183', 'INVITE', $sht(a=>response::183::invite)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>response::183::invite)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "183", "$var(tmp_json)");
+		jansson_set("string", "cseq", "INVITE", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>response::183::invite)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>response::183::invite) = 0;
+	}
+
+#!endif
+
+	#200 INVITE
+	if($sht(a=>response::200::invite) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, cseq, total) VALUES($var(f_date), $var(t_date), '200', 'INVITE', $sht(a=>response::200::invite)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>response::200::invite)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "200", "$var(tmp_json)");
+		jansson_set("string", "cseq", "INVITE", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>response::200::invite)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>response::200::invite) = 0;
+	}
+
+	#407 BYE
+	if($sht(a=>response::407::bye) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, cseq, total) VALUES($var(f_date), $var(t_date), '407', 'BYE', $sht(a=>response::407::bye)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>response::407::bye)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "407", "$var(tmp_json)");
+		jansson_set("string", "cseq", "BYE", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>response::407::bye)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>response::407::bye) = 0;
+	}
+
+	#401 BYE
+	if($sht(a=>response::401::bye) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, cseq, total) VALUES($var(f_date), $var(t_date), '401', 'BYE', $sht(a=>response::401::bye)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>response::401::bye)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "401", "$var(tmp_json)");
+		jansson_set("string", "cseq", "BYE", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>response::401::bye)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>response::401::bye) = 0;
+	}
+
+	#200 BYE
+	if($sht(a=>response::200::bye) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, cseq, total) VALUES($var(f_date), $var(t_date), '200', 'BYE', $sht(a=>response::200::bye)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>response::200::bye)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "200", "$var(tmp_json)");
+		jansson_set("string", "cseq", "BYE", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>response::200::bye)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>response::200::bye) = 0;
+	}
+
+	#ALL TRANSACTIONS MESSAGES
+	if($sht(a=>method::all) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, total) VALUES($var(f_date), $var(t_date), 'ALL', $sht(a=>method::all)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>method::all)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "ALL", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>method::all)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>method::all) = 0;
+	}
+
+	 #ALL MESSAGES ON INTERFACE
+	if($sht(a=>method::total) > 0) {
+		#sql_query("cb", "INSERT INTO stats_method (from_date, to_date, method, total) VALUES($var(f_date), $var(t_date), 'TOTAL', $sht(a=>method::total)) ON DUPLICATE KEY UPDATE total=total+$sht(a=>method::total)");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "method", "TOTAL", "$var(tmp_json)");
+		jansson_set("integer", "value", "$sht(a=>method::total)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_method) = $var(stats_method) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_method) = $var(stats_method) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+		$sht(a=>method::total) = 0;
+	}
+
+	# Send bulk method & response stats
+	$var(body) = $var(stats_method);
+	route(SEND_ES_DATA);
+
+#!ifdef WITH_HOMER_CUSTOM_STATS
+	#Generic stats
+	$var(stats_generic) = "";
+	$var(type) = "stats_generic";
+
+	sht_iterator_start("i1", "d");
+	while(sht_iterator_next("i1")) {
+		$var(key) = $(shtitkey(i1){s.select,2,:});
+		#sql_query("cb", "INSERT INTO stats_generic (from_date, to_date, type, total) VALUES($var(f_date), $var(t_date), '$var(key)', $shtitval(i1)) ON DUPLICATE KEY UPDATE total=(total+$shtitval(i1))/2");
+		jansson_set("string", "host", "$var(host)", "$var(tmp_json)");
+		jansson_set("string", "timestamp", "$var(isotime)", "$var(tmp_json)");
+		jansson_set("string", "name", "$var(key)", "$var(tmp_json)");
+		jansson_set("integer", "value", "$shtitval(i1)", "$var(tmp_json)");
+
+		#!ifdef TO_ELASTIC
+		$var(stats_generic) = $var(stats_generic) + " {\"index\": {\"_index\":\"homer-"+ $timef(%d.%m.%Y) +"\",\"_type\":\""+$var(type)+"\" }}\n";
+		$var(stats_generic) = $var(stats_generic) + $var(tmp_json) + "\n";
+		$var(tmp_json) = 0;
+		#!endif
+
+		#!ifdef TO_GRAYLOG
+		jansson_set("string", "timestamp", ""+$var(gentime)+"."+$TV(u)/999+"", "$var(tmp_json)");
+		jansson_set("string", "short_message", "Homer-Stats", "$var(tmp_json)");
+		$var(graylog_json) = $var(tmp_json);
+		$var(tmp_json) = 0;
+		route(SEND_ES_DATA);
+		$var(graylog_json) = 0;
+		#!endif
+
+	}
+	sht_iterator_end("i1");
+	sht_rm_name_re("d=>.*");
+
+	$var(body) = $var(stats_generic);
+	route(SEND_ES_DATA);
+#!endif
+}
+
+route[SEND_ES_DATA] {
+
+	$http_req(suspend) = 0;
+	$http_req(method) = "POST";
+	$http_req(hdr) = "Content-Type: application/json; charset=UTF-8";
+
+#!ifdef TO_GRAYLOG
+	if ($var(graylog_json) == "" || $var(graylog_json) == 0 ) return;
+	$var(graylogurl) = "GRAYLOG_GELF_HTTP_URL/gelf";
+	http_async_query("$var(graylogurl)", "$var(graylog_json)", "ES_REPLY");
+#!else
+	if ($var(body) == "") return;
+	$var(elasticurl) = "ELASTICSEARCH_URL/_bulk";
+	http_async_query("$var(elasticurl)", "$var(body)", "ES_REPLY");
+#!endif
+
+}
+
+route[ES_REPLY] {
+
+	if($http_err) {
+		xlog("L_ERR","route[ES_REPLY]: $http_err\n");
+	} else {
+		xlog("L_INFO", "route[ES_REPLY]: status $http_rs\n");
+		xlog("L_INFO", "route[ES_REPLY]: body	$http_rb\n");
+	}
+}
+
+route[STORE] {
+
+		if($rm == "REGISTER") {
+			$var(table) = "sip_capture_registration";
+		}
+		else if($rm =~ "(INVITE|UPDATE|BYE|ACK|PRACK|REFER|CANCEL)$")
+		{
+			$var(table) = "sip_capture_call";
+		}
+		else if($rm =~ "(NOTIFY)$" && is_present_hf("Event") && $hdr(Event)=~"refer;")
+		{
+			$var(table) = "sip_capture_call";
+		}
+		else if($rm =~ "(INFO)$")
+		{
+			$var(table) = "sip_capture_call";
+		}
+		else if($rm =~ "(OPTIONS)$" )
+		{
+			$var(table) = "sip_capture_rest";
+		}
+		else {
+			$var(table) = "sip_capture_rest";
+		}
+
+#!ifdef KAMAILIO_4_3
+	#For old models. Not accurate insert time. System vs capture time.
+	#$var(utc) = $timef(%Y%m%d);
+	#as workaround for kamailio < 4.4
+	sql_query("cb", "SELECT UTC_DATE()+0;", "ra");
+		if($dbr(ra=>rows)>0) {
+			$var(utc) = $dbr(ra=>[0,0]);
+		}
+	sql_result_free("ra");
+#!else
+	#for Kamailio >=4.4 please uncomment this parameters:
+	# New utimef can fix the timediff issue. But unfortunately only kamailio 4.4
+	$var(utc) = $utimef(%Y%m%d);
+	# or sipcapture style
+	#$var(utc) = "%Y%m%d";
+#!endif
+
+	$var(a) = $var(table) + "_" + $var(utc);
+	sip_capture("$var(a)");
+}
+
+event_route[sipcapture:request] {
+	xlog("received sipcapture request from $si:$sp\r\n");
+}
+
+#!ifdef WITH_HOMER_CUSTOM_STATS
+event_route[xhttp:request] {
+	set_reply_close();
+	set_reply_no_connect();
+	xlog("L_WARN", "HTTP request received on $Rp, $hu\n");
+	if($hu =~ "/api/v1/stats/push") {
+		#Json is our body
+		$var(json) = $rb;
+		jansson_get("type", $var(json), "$var(n)");
+		xlog("L_WARN","Type is $var(n)");
+		if($var(n) == "rtp_stat") {
+			$var(i) = 0;
+			$(avp(x)[0]) = 'interval';
+			$(avp(x)[1]) = 'streams';
+			$(avp(x)[2]) = 'packets';
+			$(avp(x)[3]) = 'lost';
+			$(avp(x)[4]) = 'late';
+			$(avp(x)[5]) = 'lost_perc';
+			$(avp(x)[6]) = 'late_perc';
+			$(avp(x)[7]) = 'out_of_seq';
+			$(avp(x)[8]) = 'delay_min';
+			$(avp(x)[9]) = 'delay_max';
+			while(is_avp_set("$(avp(x)[$var(i)])")) {
+				xlog("L_INFO", "Array value [$var(i)]: $(avp(x)[$var(i)])\n");
+				jansson_get("$(avp(x)[$var(i)])", $var(json), "$var(d)");
+				$var(n) = $(var(d){s.int});
+				if($sht(d=>generic::$(avp(x)[$var(i)])) == $null) $sht(d=>generic::$(avp(x)[$var(i)])) = $var(n);
+				else $sht(d=>generic::$(avp(x)[$var(i)])) = ($sht(d=>generic::$(avp(x)[$var(i)])) + $var(n))/2;
+				$var(i) = $var(i) + 1;
+				}
+			}
+			xhttp_reply("200", "Ok", "done", "");
+			exit;
+		}
+		xhttp_reply("403", "Forbidden", "", "");
+		exit;
+}
+#!endif

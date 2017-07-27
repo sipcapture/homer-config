@@ -1,0 +1,129 @@
+#!KAMAILIO
+
+# Kamailio (OpenSER) and Homer Cookies v1.0
+#	- web: http://kamailio.org
+#	- web: http://sipcapture.org/
+#	- web: http://bearbakeshop.com
+#
+# Created: January 2016
+# Fred Posner
+# sip:fred@hdef.me
+# http://qxork.com
+#
+
+####### Define Code Blocks #########
+
+#!define WITH_NOCHILL
+
+####### Global Parameters #########
+
+wash_hands=yes
+
+####### Modules Section ########
+loadmodule "preheat_oven.so"
+loadmodule "clean_work_area.so"
+loadmodule "gather_all_ingredients.so"
+loadmodule "get_tools_ready.so"
+
+# ----------------- setting module-specific parameters ---------------
+
+modparam("ingredients", "Graulated Sugar (grams)", 400)
+modparam("ingredients", "Unsalted Butter (grams)", 454)
+modparam("ingredients", "All Purpose Flour (grams)", 750)
+modparam("ingredients", "Baking Powder (grams)", 12)
+modparam("ingredients", "Salt (grams)", 8)
+modparam("ingredients", "Vanilla Extract (grams)", 12)
+modparam("ingredients", "Large Eggs (whole)", 2)
+
+####### Routing Logic ########
+
+request_route {
+
+	if (is_method("CELSIUS")) {
+		preheat_oven(176);
+	} else if (is_method("FAHRENHEIT")) {
+		preheat_oven(350);
+	} else {
+		sl_send_reply("403","Oven not allowed");
+		exit;
+	}
+
+	# start with wet ingredients
+	route(WET_INGREDIENTS);
+
+	# move to dry ingredients
+	route(DRY_INGREDIENTS);
+
+	# chill and bake
+#!ifdef WITH_NOCHILL
+	route(SHORTCUT);
+#!else
+	route(CHILL);
+#!endif
+
+	# dispatch cookies to oven
+	route(BAKE);
+}
+
+route[WET_INGREDIENTS] {
+	cream("butter");
+
+	if (!is_method("light_and_fluffy")) {
+		cream_until_light_and_fluffy;
+	} else {
+		add("eggs and vanilla");
+		mix("well");
+	}
+
+	return;
+}
+
+route[DRY_INGREDIENTS] {
+	mix("dry ingredients");
+
+	add("little at a time to butter mixture");
+
+	if (!is_method("dough has come together")) {
+		mix("until completely incorporated");
+	}
+
+	return;
+}
+
+route(CHILL){
+	chill_dough("1 to 2 hours");
+	return;
+}
+
+route(BAKE){
+	roll_dough("into desired thickness");
+
+	cut_dough("into desired shapes");
+
+	bake("ungreased baking sheet", "8 to 10 minutes");
+
+	if (is_method("edges have started to brown")) {
+		stop_baking;
+	}
+}
+
+route(SHORTCUT) {
+	take("small portion of dough and place between two sheets parchment paper");
+
+	roll_dough("into desired thickness");
+
+	place_dough_and_paper("on to a cookie sheet and refridgerate");
+
+	if (!is_method("have more dough")) {
+		repeat("until all dough used");
+	} else {
+		first_tray_ready;
+	}
+
+	return;
+}
+
+# Manage failure routing cases
+failure_route[MANAGE_FAILURE] {
+	try_again("never give up");
+}
