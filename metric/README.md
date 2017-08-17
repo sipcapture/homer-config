@@ -69,6 +69,7 @@ cd homer-installer
 The fastest way to get a Elasticsearch, Graylog or InfluxDB playground is docker. Let's 
 assume your PublicIP is 165.227.138.11.
 
+
 #### Elasticsearch
 
 To get started with Elasticsearch simply run
@@ -93,6 +94,7 @@ something like this:
 
 ![ImgurElasticsearch](http://i.imgur.com/GSsmZUA.png)
 
+
 #### Graylog
 
 To get started with Graylog you can use the provided docker/Graylog/docker-compose.yml 
@@ -105,12 +107,11 @@ To
 - GRAYLOG_WEB_ENDPOINT_URI=http://165.227.138.11:9000/api
 ```
 
-Now you can run:
+Now you can run from the Graylog folder:
 
 ```bash
 docker-compose up -d
 ```
-
 
 After some moments you can navigate to http://165.227.138.11:9000. Login with admin/admin 
 and launch a new global GELF HTTP input under System/Inputs. Choose a name and simply use the default values like here:
@@ -121,6 +122,8 @@ Change inside the kamailio.cfg the Graylog parts and restart kamailio.
 
 ```bash
 /* Parameters for Graylog */
+#!substdef "!GRAYLOG_GELF_HTTP_URL!http://127.0.0.1:12201!g"
+To
 #!substdef "!GRAYLOG_GELF_HTTP_URL!http://165.227.138.11:12201!g"
 
 ##!define   DO_GRAYLOG
@@ -128,11 +131,11 @@ To
 #!define   DO_GRAYLOG
 ```
 
+
 #### InfluxDB
 
 To get started with InfluxDB you can use the provided docker/TICK/docker-compose.yml 
 file. Just run from the TICK folder:
-
 
 ```bash
 docker-compose up -d
