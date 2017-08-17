@@ -66,7 +66,8 @@ cd homer-installer
 ./homer_installer.sh
 ```
 
-The fastest way to get a Elasticsearch, Graylog or InfluxDB playground is docker.
+The fastest way to get a Elasticsearch, Graylog or InfluxDB playground is docker. Let's 
+assume your PublicIP is 165.227.138.11.
 
 #### Elasticsearch
 
@@ -79,11 +80,15 @@ Change inside the kamailio.cfg the Elasticsearch parts and restart kamailio.
 ```bash
 /* Parameters for Elasticsearch */
 #!substdef "!ELASTICSEARCH_HTTP_URL!http://127.0.0.1:9200!g"
+To
+#!substdef "!ELASTICSEARCH_HTTP_URL!http://165.227.138.11:9200!g"
 
+##!define   DO_ELASTICSEARCH
+To
 #!define   DO_ELASTICSEARCH
 ```
 
-Visit http://PublicIP:5601 and set homer-* as Index. After one minute you should see
+Visit http://165.227.138.11:5601 and set homer-* as Index. After one minute you should see
 something like this:
 
 ![ImgurElasticsearch](http://i.imgur.com/GSsmZUA.png)
@@ -91,14 +96,13 @@ something like this:
 #### Graylog
 
 To get started with Graylog you can use the provided docker/Graylog/docker-compose.yml 
-file. Before you can run it you have to change inside the docker-compose.yml:
+file. Before you can run it you have to change inside the docker-compose.yml the 
+GRAYLOG_WEB_ENDPOINT_URI to 165.227.138.11:
 
 ```bash
 - GRAYLOG_WEB_ENDPOINT_URI=http://127.0.0.1:9000/api
-
 To
-
-- GRAYLOG_WEB_ENDPOINT_URI=http://PublicIP:9000/api
+- GRAYLOG_WEB_ENDPOINT_URI=http://165.227.138.11:9000/api
 ```
 
 Now you can run:
@@ -108,7 +112,7 @@ docker-compose up -d
 ```
 
 
-After some moments you can navigate to http://PublicIP:9000 and launch a new global GELF HTTP input under System/Inputs. Choose a name and simply use the default values like here:
+After some moments you can navigate to http://165.227.138.11:9000 and launch a new global GELF HTTP input under System/Inputs. Choose a name and simply use the default values like here:
 
 ![ImgurGraylog](http://i.imgur.com/AX0GTN2.png)
 
@@ -116,9 +120,36 @@ Change inside the kamailio.cfg the Graylog parts and restart kamailio.
 
 ```bash
 /* Parameters for Graylog */
-#!substdef "!GRAYLOG_GELF_HTTP_URL!http://127.0.0.1:12201!g"
+#!substdef "!GRAYLOG_GELF_HTTP_URL!http://165.227.138.11:12201!g"
 
-#!define 	DO_GRAYLOG
+##!define   DO_GRAYLOG
+To
+#!define   DO_GRAYLOG
 ```
 
+#### InfluxDB
 
+To get started with InfluxDB you can use the provided docker/TICK/docker-compose.yml 
+file. Just run from the TICK folder:
+
+
+```bash
+docker-compose up -d
+```
+
+Change inside the kamailio.cfg the InfluxDB parts and restart kamailio.
+
+```bash
+/* Parameters for Elasticsearch */
+#!substdef "!INFLUXDB_HTTP_URL!http://127.0.0.1:8086!g"
+To
+#!substdef "!INFLUXDB_HTTP_URL!http://165.227.138.11:8086!g"
+
+##!define 	DO_INFLUXDB
+To
+#!define 	DO_INFLUXDB
+```
+
+Visit http://165.227.138.11:8888 go to the Data Explorer tab and build your first query.
+
+![Imgur](http://i.imgur.com/vbegi8G.png)
