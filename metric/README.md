@@ -53,6 +53,8 @@ For example if you want to send every 1 second kpi, geo and xrtp metrics to Infl
 ```
 
 
+Out of the box only SIP, RTCP (rotated) and Logs if present will be stored.
+
 ### Getting Started
 
 To install homer with these configuration files you can use the homer-installer from the 
