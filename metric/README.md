@@ -12,7 +12,7 @@ Time which could be spend to provide you the ability to capture a larger range o
 correlation between them. Or simply spoken to improve the core aspects of homer without trying to reinvent the wheel.
 
 ### Structure
-The main entry point is the #### kamailio.cfg. From here you can configure:
+The main entry point is the kamailio.cfg. From here you can configure:
 
 * Parameters for Homer
 * Parameters for Elasticsearch, Graylog, InfluxDB
@@ -53,5 +53,23 @@ For example if you want to send every 1 second kpi, geo and xrtp metrics to Infl
 ```
 
 
-### Install:
+### Getting Started
+
+To install homer with these configuration files you can use the homer-installer from the 
+kamailio-5.x-metric branch.
+
+```bash
+git clone https://github.com/sipcapture/homer-installer.git -b kamailio-5.x-metric
+cd homer-installer
+./homer_installer.sh
+```
+
+The fastest way to get a Elasticsearch, Graylog or InfluxDB playground is docker.
+
+[Elasticsearch+Kibana](https://hub.docker.com/r/nshou/elasticsearch-kibana)
+[Graylog](https://hub.docker.com/r/graylog2/server)
+[InfluxDB](https://github.com/influxdata/TICK-docker/tree/master/1.2)
+
+
+
 
