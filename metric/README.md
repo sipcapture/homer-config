@@ -67,7 +67,9 @@ cd homer-installer
 The fastest way to get a Elasticsearch, Graylog or InfluxDB playground is docker.
 
 [Elasticsearch+Kibana](https://hub.docker.com/r/nshou/elasticsearch-kibana)
+
 [Graylog](https://hub.docker.com/r/graylog2/server)
+
 [InfluxDB](https://github.com/influxdata/TICK-docker/tree/master/1.2)
 
 
