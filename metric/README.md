@@ -86,7 +86,7 @@ Change inside the kamailio.cfg the Elasticsearch parts and restart kamailio.
 Visit your ServerIP:5601 and set homer-* as Index. After one minute you should see
 something like this:
 
-[ImgurElasticsearch](http://i.imgur.com/GSsmZUA.png)
+![ImgurElasticsearch](http://i.imgur.com/GSsmZUA.png)
 
 
 
