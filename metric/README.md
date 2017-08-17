@@ -68,11 +68,27 @@ cd homer-installer
 
 The fastest way to get a Elasticsearch, Graylog or InfluxDB playground is docker.
 
-[Elasticsearch+Kibana](https://hub.docker.com/r/nshou/elasticsearch-kibana)
+##### Elasticsearch
 
-[Graylog](https://hub.docker.com/r/graylog2/server)
+To get started with Elasticsearch simply run
 
-[InfluxDB](https://github.com/influxdata/TICK-docker/tree/master/1.2)
+* docker run -d -p 9200:9200 -p 5601:5601 nshou/elasticsearch-kibana
+
+Change inside the kamailio.cfg the Elasticsearch parts and restart kamailio.
+
+```bash
+/* Parameters for Elasticsearch */
+#!substdef "!ELASTICSEARCH_HTTP_URL!http://127.0.0.1:9200!g"
+
+#!define   DO_ELASTICSEARCH
+```
+
+Visit your ServerIP:5601 and set homer-* as Index. After one minute you should see
+something like this:
+
+[ImgurElasticsearch](http://i.imgur.com/GSsmZUA.png)
+
+
 
 
 
