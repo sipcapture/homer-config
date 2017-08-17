@@ -97,7 +97,7 @@ something like this:
 
 To get started with Graylog you can use the provided docker/Graylog/docker-compose.yml 
 file. Before you can run it you have to change inside the docker-compose.yml the 
-GRAYLOG_WEB_ENDPOINT_URI to 165.227.138.11:
+GRAYLOG_WEB_ENDPOINT_URI to your PublicIP 165.227.138.11:
 
 ```bash
 - GRAYLOG_WEB_ENDPOINT_URI=http://127.0.0.1:9000/api
@@ -112,7 +112,8 @@ docker-compose up -d
 ```
 
 
-After some moments you can navigate to http://165.227.138.11:9000 and launch a new global GELF HTTP input under System/Inputs. Choose a name and simply use the default values like here:
+After some moments you can navigate to http://165.227.138.11:9000. Login with admin/admin 
+and launch a new global GELF HTTP input under System/Inputs. Choose a name and simply use the default values like here:
 
 ![ImgurGraylog](http://i.imgur.com/AX0GTN2.png)
 
