@@ -5,7 +5,7 @@ services:
   telegraf:
     image: telegraf:latest
     volumes:
-      - ./etc/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+      - ./telegraf.conf:/etc/telegraf/telegraf.conf:ro
     links:
       - influxdb
     ports:
@@ -59,3 +59,12 @@ services:
       KAPACITOR_URL: http://kapacitor:9092
     links:
       - kapacitor
+  grafana:
+    image: grafana/grafana:latest
+    restart: always
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data/grafana:/var/lib/grafana
+    links:
+      - influxdb
