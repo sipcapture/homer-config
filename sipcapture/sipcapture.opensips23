@@ -645,9 +645,19 @@ route[STORE] {
 	
 	#$var(utc) = "%Y%m%d";
 	
-	if($var(table) == "sip_capture_call") sip_capture("sip_capture_call_%Y%m%d");
-	else if($var(table) == "sip_capture_registration") sip_capture("sip_capture_registration_%Y%m%d");
-	else sip_capture("sip_capture_rest_%Y%m%d");
+	#Special procedure for custom headers -> fields
+        if ($hdr(P-Asserted-Identity)) $var(cf1) = $(hdr(P-Asserted-Identity){nameaddr.uri}{uri.user});
+        else $var(cf1) = "";
+	
+        if ($hdr(X-INFO)) $var(cf2) = $hdr(X-INFO);
+        else $var(cf2) = "";
+
+        if ($hdr(Remote-Party-ID)) $var(cf3) = $(hdr(Remote-Party-ID)[0]{nameaddr.uri}{uri.user});
+        else $var(cf3) = "";
+
+        if($var(table) == "sip_capture_call") sip_capture("sip_capture_call_%Y%m%d", "$var(cf1)", "$var(cf2)", "$var(cf3)");
+        else if($var(table) == "sip_capture_registration") sip_capture("sip_capture_registration_%Y%m%d");
+        else sip_capture("sip_capture_rest_%Y%m%d");
 }
 
 
