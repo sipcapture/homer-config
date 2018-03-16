@@ -291,8 +291,9 @@ route {
 			xlog("report_capture is not in < 4.3");
 #!else
 			report_capture("$var(table)", "$var(callid)");
-#!endif                        
-                        drop;
+#!endif                      
+			#uncomment it if you want drop PUBLISH
+                        #drop;
                 }
         }
 
